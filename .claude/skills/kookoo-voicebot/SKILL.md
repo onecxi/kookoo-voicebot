@@ -1,27 +1,41 @@
 ---
 name: kookoo-voicebot
-description: Scaffold, configure, and deploy AI voice agents on KooKoo/Ozonetel telephony with ElevenLabs. Use when building voice bots, IVR systems, or phone-based AI agents.
-argument-hint: "[action: init | add-hooks | add-transfer | add-mongodb | deploy | health | debug]"
+description: Build and deploy any AI voice agent on KooKoo/Ozonetel telephony with ElevenLabs. Use when the user wants to create ANY phone-based voice application — receptionist, tutor, support bot, appointment scheduler, survey bot, etc. Generates a complete deployable Node.js app with a /kookoo URL to paste into the KooKoo portal.
+argument-hint: "[describe your voice agent]"
 allowed-tools: Bash(npm *) Bash(node *) Bash(git *) Bash(curl *) Read Write Edit Grep Glob WebFetch
 ---
 
-# KooKoo VoiceBot Skill
+# KooKoo Voice Agent Builder
 
-You are helping a developer build an AI voice agent using the `kookoo-voicebot` npm package. This package connects KooKoo/Ozonetel telephony to ElevenLabs Conversational AI with zero telephony knowledge required.
+You are building an AI voice agent that handles real phone calls. The user describes what kind of agent they want, and you generate a complete, deployable Node.js application using the `kookoo-voicebot` SDK.
 
-## Action: $ARGUMENTS
+## What to build
 
-Based on the action, follow the appropriate section below. If no action is provided, show available actions and ask what the user wants to do.
+The user said: **$ARGUMENTS**
+
+Based on their description, you will:
+1. Scaffold a complete Node.js project
+2. Install `kookoo-voicebot` from npm
+3. Write `index.js` with the appropriate hooks for their use case
+4. Write the ElevenLabs agent system prompt they should paste into their agent config
+5. Create deployment files (Procfile, .env.example, .gitignore)
+6. Tell them exactly how to deploy and get a working phone number
 
 ---
 
-## Action: init
+## Step-by-step: Build the voice agent
 
-Scaffold a new kookoo-voicebot project from scratch:
+### 1. Scaffold the project
 
-1. Create a new directory (or use current) and run `npm init -y`
-2. Install: `npm install kookoo-voicebot`
-3. Create `index.js` with this starter:
+```bash
+mkdir <agent-name> && cd <agent-name>
+npm init -y
+npm install kookoo-voicebot
+```
+
+### 2. Create index.js
+
+Use the `KooKooVoiceBot` class. The structure is always:
 
 ```js
 const { KooKooVoiceBot, xml } = require('kookoo-voicebot');
@@ -35,25 +49,40 @@ const bot = new KooKooVoiceBot(
     },
   },
   {
-    onCallStart({ ucid, did }) {
-      console.log(`Call started: ${ucid} from ${did}`);
-    },
-    onTranscript({ ucid, role, text, isFinal }) {
-      if (isFinal) console.log(`[${role}] ${text}`);
-    },
-    onCallEnd({ ucid }) {
-      console.log(`Call ended: ${ucid}`);
-    },
-    onPostStream() {
-      return xml.playAndHangup('Thank you for calling. Goodbye!');
-    },
+    // Add hooks based on the use case...
   }
 );
 
 bot.start();
 ```
 
-4. Create `.env.example`:
+### Available hooks — use what the agent needs:
+
+| Hook | When it fires | Return value |
+|------|--------------|-------------|
+| `onCallStart({ucid, did, metadata})` | Call connects | void |
+| `onCallEnd({ucid})` | Call disconnects | void |
+| `onTranscript({ucid, role, text, isFinal})` | User or agent speaks | void |
+| `onToolCall({ucid, name, params, id})` | ElevenLabs tool invoked | result object |
+| `onInterrupt({ucid})` | User barges in | void |
+| `onPostStream({ucid, params})` | AI stream ends, call still active | KooKoo XML string |
+| `getInitData({ucid, did})` | Before ElevenLabs connects | data object |
+| `onError({ucid, error})` | Error occurs | void |
+| `onCDR(data)` | KooKoo CDR callback | void |
+
+### XML helpers for onPostStream:
+
+```js
+const { xml } = require('kookoo-voicebot');
+xml.playAndHangup('Goodbye!');              // play TTS then hang up
+xml.playAndHangup('धन्यवाद!', 'hi-IN');     // Hindi TTS
+xml.transfer('9001');                        // dial an extension
+xml.ccTransfer('general', 'sales', 30);      // contact center queue transfer
+xml.hangup();                                // just hang up
+```
+
+### 3. Create .env.example
+
 ```
 ELEVENLABS_AGENT_ID=agent_xxxxxxxxxxxx
 ELEVENLABS_API_KEY=sk_xxxxxxxxxxxx
@@ -61,137 +90,291 @@ SIP_NUMBER=524431
 PORT=3000
 ```
 
-5. Create `Procfile`: `web: node index.js`
-6. Create `.gitignore` with `node_modules/`, `.env`, `*.log`
-7. Tell the user to:
-   - Create an ElevenLabs agent at elevenlabs.io > Conversational AI
-   - Set the agent system prompt to match their use case
-   - Copy the agent ID from the URL (format: `agent_xxxx`)
-   - Set env vars and deploy to Railway
+If using MongoDB, add: `MONGODB_URI=mongodb+srv://...`
+
+### 4. Create deployment files
+
+**Procfile:**
+```
+web: node index.js
+```
+
+**nixpacks.toml:**
+```toml
+[phases.setup]
+nixPkgs = ["nodejs_20"]
+[start]
+cmd = "node index.js"
+```
+
+**.gitignore:**
+```
+node_modules/
+.env
+*.log
+```
+
+### 5. Generate the ElevenLabs agent system prompt
+
+Based on the user's description, write a system prompt for the ElevenLabs agent. Tell the user to:
+
+1. Go to **elevenlabs.io** > **Conversational AI** > **Create Agent**
+2. Pick a voice (for Indian voice: choose "Aria" or any Indian-accented voice, or clone one)
+3. Paste the system prompt you generate into **Agent > Prompt**
+4. Set the **First message** (the greeting the agent says when the call connects)
+5. If tools are needed (transfer, voicemail, etc.), add them under **Tools** tab
+6. Copy the **Agent ID** from the URL bar (format: `agent_xxxxxxxxxxxx`)
+
+**IMPORTANT for Indian voice:** Tell the user to select an Indian English voice in ElevenLabs voice settings, or use the voice cloning feature for a custom Indian voice. The language in `<playtext>` tags should use `lang="en-IN"` for Indian English.
+
+### 6. Deploy and get the application URL
+
+Tell the user:
+
+1. **Push to GitHub** — `git init && git add -A && git commit -m "Initial" && git remote add origin <url> && git push -u origin main`
+2. **Deploy on Railway:**
+   - Go to railway.com, create new project, connect GitHub repo
+   - Add environment variables: `ELEVENLABS_AGENT_ID`, `ELEVENLABS_API_KEY`, `SIP_NUMBER`
+   - Deploy — Railway gives you a URL like `https://your-app.up.railway.app`
+3. **The application URL is:** `https://your-app.up.railway.app/kookoo`
+4. **Paste this URL in KooKoo portal:**
+   - Sign up at kookoo.in or ozonetel.com
+   - Go to your KooKoo dashboard
+   - Get a phone number
+   - Set the IVR/Application URL to: `https://your-app.up.railway.app/kookoo`
+   - Save — calls to that number now hit your voice agent
 
 ---
 
-## Action: add-hooks
+## KooKoo Platform Documentation (Source of Truth)
 
-Add lifecycle hooks to an existing kookoo-voicebot project. Read the current `index.js`, find the KooKooVoiceBot constructor, and add hooks the user asks for. Available hooks:
+Use this documentation for ALL telephony decisions. Do NOT guess — use these exact formats.
 
-| Hook | Signature | Purpose |
-|------|-----------|---------|
-| `onCallStart` | `({ucid, did, metadata})` | New call connected |
-| `onCallEnd` | `({ucid})` | Call disconnected |
-| `onTranscript` | `({ucid, role, text, isFinal})` | User or agent spoke |
-| `onToolCall` | `({ucid, name, params, id}) => result` | ElevenLabs agent invoked a tool |
-| `onInterrupt` | `({ucid})` | User barged in |
-| `onPostStream` | `({ucid, params}) => xmlString` | After AI stream ends, return KooKoo XML |
-| `getInitData` | `({ucid, did}) => object` | Pass data to ElevenLabs on connect |
-| `onError` | `({ucid, error})` | Error occurred |
-| `onCDR` | `(data)` | KooKoo CDR callback received |
+### IVR XML Tags
 
----
-
-## Action: add-transfer
-
-Add call transfer capability to the voice bot:
-
-1. Add a `onToolCall` hook that handles `transfer_call` and `take_voicemail`
-2. Add a `onPostStream` hook that returns the appropriate XML based on the tool call
-3. Create a map of department extensions
-4. Remind the user to add matching tools in their ElevenLabs agent config:
-   - Tool `transfer_call` with parameter `department` (string)
-   - Tool `take_voicemail` with parameter `message` (string)
-
-Use `xml.transfer(number)` for direct dial, `xml.ccTransfer(queue, dept)` for contact center.
-
----
-
-## Action: add-mongodb
-
-Add MongoDB persistence to the voice bot:
-
-1. Install mongoose: `npm install mongoose`
-2. Create a CallLog schema
-3. Add `onCallStart` → create record, `onTranscript` → push to transcript array, `onCallEnd` → set endedAt
-4. Connect mongoose before `bot.start()`
-5. Add `MONGODB_URI` to `.env.example`
-
----
-
-## Action: deploy
-
-Guide the user to deploy their voice bot to Railway:
-
-1. Verify `Procfile` exists with `web: node index.js`
-2. Verify `.gitignore` excludes `.env` and `node_modules/`
-3. Commit and push to GitHub
-4. Create a Railway project, connect the GitHub repo
-5. Set environment variables in Railway dashboard:
-   - `ELEVENLABS_AGENT_ID`, `ELEVENLABS_API_KEY`, `SIP_NUMBER`
-   - `MONGODB_URI` (if using MongoDB)
-6. Deploy — Railway auto-detects Node.js
-7. The WebSocket URL is auto-detected from `RAILWAY_PUBLIC_DOMAIN`
-8. Point KooKoo IVR URL to `https://<railway-domain>/kookoo`
-
----
-
-## Action: health
-
-Check the health of a deployed kookoo-voicebot:
-
-1. Ask for the Railway URL if not obvious from env/config
-2. Fetch `https://<url>/health` and display the result
-3. Fetch `https://<url>/` to check active calls
-4. If unhealthy, suggest checking Railway logs
-
----
-
-## Action: debug
-
-Help debug common issues. Check for these problems:
-
-| Symptom | Cause | Fix |
-|---------|-------|-----|
-| `agent does not exist` | Wrong ELEVENLABS_AGENT_ID | Use the ID from the URL, not the name (format: `agent_xxxx`) |
-| `Override not allowed` | Agent config locks overrides | Don't send config overrides, or enable in ElevenLabs Security tab |
-| `MongoDB connection error` | Bad URI or whitespace | Ensure URI is a single line, no line breaks |
-| Blank audio / silence | ElevenLabs not connected | Check agent ID and API key, check Railway logs |
-| `wss://your-railway-app` in logs | WEBSOCKET_URL not set | Remove the placeholder — SDK auto-detects from RAILWAY_PUBLIC_DOMAIN |
-| Stream duration=1 | WebSocket URL unreachable | Check the wss:// URL in logs matches your Railway domain |
-| `Thank you goodbye` immediately | Post-stream default | Normal — this plays after AI conversation ends |
-| Dashboard not showing calls | MongoDB disconnected | Set MONGODB_URI in Railway Variables (not .env file) |
-
----
-
-## KooKoo Audio Format Reference
-
-For debugging audio issues:
-
-- **Format**: PCM Linear 16-bit, 8000 Hz, mono
-- **Chunk**: 80 samples (10ms)
-- **First packet**: 16kHz / 160 frames — must be ignored (SDK does this automatically)
-- **Send back**: Same JSON format with `sampleRate: 8000`
-- **Commands**: `{"command": "clearBuffer"}` for barge-in, `{"command": "callDisconnect"}` to end
-
-## KooKoo IVR XML Tags
-
-For `onPostStream` responses:
+All IVR responses MUST be wrapped in `<response>` tags:
 
 ```xml
-<!-- Play text and hang up -->
-<playtext lang="en-IN" speed="3" quality="best" type="ggl">Hello</playtext>
-<hangup/>
+<?xml version="1.0" encoding="UTF-8"?>
+<response>
+    <!-- tags here -->
+</response>
+```
 
-<!-- Transfer to number -->
-<dial record="true">9001</dial>
+#### `<playtext>` — Text-to-speech
 
-<!-- Transfer to contact center queue -->
+```xml
+<playtext lang="en-IN" speed="3" quality="best" type="ggl">Hello, how can I help?</playtext>
+```
+
+| Attribute | Values | Default |
+|-----------|--------|---------|
+| `lang` | `en-IN`, `hi-IN`, `te-IN`, `ta-IN`, `ml-IN`, `kn-IN`, `mr-IN`, `gu-IN`, `bn-IN` | `en-IN` |
+| `speed` | `1` (slow) to `5` (fast) | `3` |
+| `quality` | `best`, `high`, `medium`, `low` | `best` |
+| `type` | `ggl` (Google), `polly` (AWS Polly) | `ggl` |
+
+#### `<dial>` — Dial another number
+
+```xml
+<dial transfer_allowed_by_caller="true" callback_onanswered="https://..." moh="default" record="true">9123456789</dial>
+```
+
+#### `<stream>` — Bidirectional WebSocket audio stream
+
+```xml
+<stream is_sip="true" url="wss://yourserver.com/ws" x-uui="{json_data}">SIP_NUMBER</stream>
+```
+
+| Attribute | Description |
+|-----------|-------------|
+| `is_sip` | Always `"true"` |
+| `url` | Your WebSocket server URL (ws:// or wss://) |
+| `x-uui` | Custom JSON data to pass with the stream |
+
+Content inside the tag = **SIP registration number**.
+
+#### `<collectdtmf>` — Collect keypad input
+
+```xml
+<collectdtmf l="1" t="5000">https://yourdomain.com/handle-input</collectdtmf>
+```
+
+#### `<cctransfer>` — Transfer to contact center queue
+
+```xml
 <cctransfer record="" moh="default" uui="sales" timeout="30" ringType="ring">general</cctransfer>
 ```
 
-Use the `xml` helpers instead of raw XML:
-```js
-const { xml } = require('kookoo-voicebot');
-xml.playAndHangup('Goodbye!');
-xml.transfer('9001');
-xml.ccTransfer('general', 'sales');
-xml.hangup();
+#### `<gotourl>` — Transfer to another IVR
+
+```xml
+<gotourl clean_params="false">https://other-ivr.com/handler</gotourl>
 ```
+
+#### `<hangup/>` — End the call
+
+```xml
+<hangup/>
+```
+
+#### `<start-record/>` — Start recording
+
+```xml
+<start-record/>
+```
+
+### Bidirectional Audio Streaming (WebSocket)
+
+#### XML to initiate stream (returned on NewCall):
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<response>
+    <start-record/>
+    <stream is_sip="true" url="wss://yourserver.com/ws" x-uui="{call_params_json}">SIP_NUMBER</stream>
+</response>
+```
+
+#### WebSocket Events
+
+**Connection open (`start`):**
+```json
+{"event": "start", "type": "text", "ucid": "xxxxx", "did": "xxxxxx"}
+```
+
+**Audio data (`media`):**
+```json
+{
+  "event": "media",
+  "type": "media",
+  "ucid": "111XXXXXXXX71",
+  "data": {
+    "samples": [8, 8, 8, ...],
+    "bitsPerSample": 16,
+    "sampleRate": 8000,
+    "channelCount": 1,
+    "numberOfFrames": 80,
+    "type": "data"
+  }
+}
+```
+
+**Call end (`stop`):**
+```json
+{"event": "stop", "type": "text", "ucid": "xxxxx", "did": "xxxxx"}
+```
+
+#### Audio Format
+
+| Property | Value |
+|----------|-------|
+| Encoding | PCM Linear |
+| Bit Depth | 16-bit (int16) |
+| Sample Rate | 8000 Hz |
+| Channels | 1 (mono) |
+| Frame Size | 80 samples per chunk (10ms) |
+
+**CRITICAL:** The first packet after connection has `sampleRate: 16000` and `numberOfFrames: 160`. This packet MUST be ignored. All subsequent packets use 8000 Hz.
+
+#### Sending Audio Back
+
+Same JSON format:
+```json
+{
+  "type": "media",
+  "ucid": "YOUR_UCID",
+  "data": {
+    "samples": [1, -3, 5, 2, ...],
+    "bitsPerSample": 16,
+    "sampleRate": 8000,
+    "channelCount": 1,
+    "numberOfFrames": 80,
+    "type": "data"
+  }
+}
+```
+
+#### Commands
+
+Clear audio buffer (for barge-in):
+```json
+{"command": "clearBuffer"}
+```
+
+Disconnect call:
+```json
+{"command": "callDisconnect"}
+```
+
+### IVR Callback Events
+
+KooKoo sends these events to your IVR URL (`/kookoo`):
+
+| Event | When | Call Status | Return XML? |
+|-------|------|------------|------------|
+| `NewCall` | Call answered (only with `url`, no `extra_data`) | Starting | YES — return stream XML |
+| `Stream` | Stream/WebSocket ended | **STILL ACTIVE** | YES — transfer, hangup, or more IVR |
+| `Dial` | Dialed party (Leg B) disconnected | **STILL ACTIVE** with Leg A | YES |
+| `Hangup` + `process=stream` | Caller hung up during stream | Ending | Return 200 OK |
+| `Hangup` + `process=dial` | Caller hung up during dial | Ending | Return 200 OK |
+| `Hangup` (no process) | Call completely ended | Ended | Return 200 OK |
+| `Disconnect` | IVR sent hangup | Ending | Return 200 OK |
+
+**Key insight:** After `event=Stream`, the call is STILL ACTIVE. You can return more XML to transfer, play messages, or hang up.
+
+### Outbound API
+
+```
+GET http://in1-cpaas.ozonetel.com/outbound/outbound.php
+```
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `api_key` | Yes | KooKoo API key |
+| `phone_no` | Yes | Number to call |
+| `url` or `extra_data` | Yes (either) | IVR URL or inline XML |
+| `outbound_version` | Yes | Always `2` |
+| `caller_id` | No | Caller ID to display |
+| `callback_url` | No | URL for final CDR |
+
+### IVR Transfer API
+
+```
+POST https://in-ccaas.ozonetel.com/api/v1/CallControl/IVRTransfer
+```
+
+Parameters: `ucid`, `did`, `appURL` (URL-encoded), `phoneno`, `api_key`, `cburl` (optional).
+
+### Fetch Call Info API
+
+```
+GET https://in1-cpaas.ozonetel.com/restkookoo/index.php/api/Call_data/calldata/ucid/{ucid}/date/{YYYY-MM-DD}/format/json
+```
+
+---
+
+## Debugging Reference
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `agent does not exist` | Wrong agent ID | Use the ID from the ElevenLabs URL: `agent_xxxx` (not the name) |
+| `Override not allowed` | Agent config locked | Don't send config overrides, or enable in ElevenLabs > Security tab |
+| `MongoDB connection error` | Whitespace in URI | Ensure URI is a single line with no line breaks |
+| Blank audio / silence | ElevenLabs not connected | Check agent ID, API key, and Railway logs |
+| Stream duration=1 | WebSocket URL wrong | SDK auto-detects from RAILWAY_PUBLIC_DOMAIN — remove WEBSOCKET_URL placeholder |
+| Dashboard shows no calls | MongoDB not connected | Set MONGODB_URI in Railway Variables dashboard (not .env file) |
+
+---
+
+## How users get started with KooKoo
+
+Tell users who are new to KooKoo:
+
+1. **Sign up** at **ozonetel.com** or **kookoo.in**
+2. Go to the dashboard and **get a phone number** (Indian virtual number)
+3. Find the **IVR/Application URL** setting for that number
+4. Paste your deployed app URL: `https://your-railway-app.up.railway.app/kookoo`
+5. **Call the number** — your AI voice agent answers!
+
+The `kookoo-voicebot` SDK handles everything: XML responses, WebSocket audio streaming, format conversion, and ElevenLabs integration. The user just writes the business logic in hooks.
