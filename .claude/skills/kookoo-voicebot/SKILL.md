@@ -119,13 +119,14 @@ node_modules/
 Based on the user's description, write a system prompt for the ElevenLabs agent. Tell the user to:
 
 1. Go to **elevenlabs.io** > **Conversational AI** > **Create Agent**
-2. Pick a voice (for Indian voice: choose "Aria" or any Indian-accented voice, or clone one)
+2. Pick a voice (for Indian voice: choose an Indian-accented voice, or use voice cloning)
 3. Paste the system prompt you generate into **Agent > Prompt**
 4. Set the **First message** (the greeting the agent says when the call connects)
 5. If tools are needed (transfer, voicemail, etc.), add them under **Tools** tab
 6. Copy the **Agent ID** from the URL bar (format: `agent_xxxxxxxxxxxx`)
+7. **IMPORTANT:** The Agent ID is the long string in the URL (e.g. `agent_2401knp683wrfbsr304aadb36v5r`), NOT the agent display name
 
-**IMPORTANT for Indian voice:** Tell the user to select an Indian English voice in ElevenLabs voice settings, or use the voice cloning feature for a custom Indian voice. The language in `<playtext>` tags should use `lang="en-IN"` for Indian English.
+**For Indian voice:** Select an Indian English voice in ElevenLabs voice settings, or use voice cloning for a custom Indian voice. The `<playtext>` XML tags should use `lang="en-IN"` for Indian English or `lang="hi-IN"` for Hindi.
 
 ### 6. Deploy and get the application URL
 
@@ -135,6 +136,7 @@ Tell the user:
 2. **Deploy on Railway:**
    - Go to railway.com, create new project, connect GitHub repo
    - Add environment variables: `ELEVENLABS_AGENT_ID`, `ELEVENLABS_API_KEY`, `SIP_NUMBER`
+   - `MONGODB_URI` (if using MongoDB) — paste as a SINGLE LINE, no line breaks
    - Deploy — Railway gives you a URL like `https://your-app.up.railway.app`
 3. **The application URL is:** `https://your-app.up.railway.app/kookoo`
 4. **Paste this URL in KooKoo portal:**
@@ -194,6 +196,8 @@ All IVR responses MUST be wrapped in `<response>` tags:
 
 Content inside the tag = **SIP registration number**.
 
+**NOTE:** The `x-uui` data set in the XML does NOT arrive as `x-uui` on the WebSocket. KooKoo forwards it as `x_headers` (see WebSocket Events below).
+
 #### `<collectdtmf>` — Collect keypad input
 
 ```xml
@@ -224,6 +228,28 @@ Content inside the tag = **SIP registration number**.
 <start-record/>
 ```
 
+### IVR Webhook: NewCall Event
+
+When KooKoo sends `event=NewCall` to your `/kookoo` endpoint, it includes rich caller data:
+
+```
+GET /kookoo?event=NewCall&sid=21275806501458167&cid=919704665032&called_number=918065740671&operator=Airtel&circle=ANDHRA+PRADESH&cid_type=MOBILE&cid_countryname=India&cid_country=91&cid_e164=%2B919704665032&request_time=2026-04-10+13%3A05%3A02
+```
+
+| Parameter | Description | Example |
+|-----------|-------------|---------|
+| `event` | Always `NewCall` for inbound | `NewCall` |
+| `sid` | Session/Call ID (same as UCID) | `21275806501458167` |
+| `cid` | Caller's phone number | `919704665032` |
+| `cid_e164` | Caller number in E.164 format | `+919704665032` |
+| `called_number` | Your KooKoo phone number | `918065740671` |
+| `operator` | Caller's telecom operator | `Airtel` |
+| `circle` | Caller's telecom circle/region | `ANDHRA PRADESH` |
+| `cid_type` | Call type | `MOBILE` or `LANDLINE` |
+| `cid_countryname` | Caller's country | `India` |
+| `cid_country` | Country code | `91` |
+| `request_time` | Call arrival time | `2026-04-10 13:05:02` |
+
 ### Bidirectional Audio Streaming (WebSocket)
 
 #### XML to initiate stream (returned on NewCall):
@@ -236,19 +262,45 @@ Content inside the tag = **SIP registration number**.
 </response>
 ```
 
-#### WebSocket Events
+#### WebSocket Events (ACTUAL FORMAT — verified from live calls)
 
 **Connection open (`start`):**
+
 ```json
-{"event": "start", "type": "text", "ucid": "xxxxx", "did": "xxxxxx"}
+{
+  "event": "start",
+  "type": "text",
+  "ucid": "21275806501458167",
+  "did": "918065740671",
+  "call_id": "919704665032",
+  "x_account": "serv_del",
+  "x_headers": "{\"cid_countryname\":\"India\",\"cid_country\":\"91\",\"called_number\":\"918065740671\",\"operator\":\"Airtel\",\"sid\":\"21275806501458167\",\"cid\":\"919704665032\",\"cid_e164\":\"+919704665032\",\"event\":\"NewCall\",\"circle\":\"ANDHRA PRADESH\",\"cid_type\":\"MOBILE\",\"request_time\":\"2026-04-10 13:05:02\"}",
+  "media": {"encoding": "PCMU", "sampleRate": 8000, "channels": 1, "bitsPerSample": 16, "payloadType": 0}
+}
 ```
+
+**CRITICAL fields in the start event:**
+
+| Field | What it is | Example |
+|-------|-----------|---------|
+| `ucid` | Unique Call ID | `21275806501458167` |
+| `did` | Called number (YOUR KooKoo number) | `918065740671` |
+| `call_id` | **CALLER's phone number** | `919704665032` |
+| `x_headers` | JSON string with ALL NewCall params (cid, operator, circle, country, etc.) | See above |
+| `media` | Audio format metadata | `{encoding, sampleRate, channels, ...}` |
+
+**IMPORTANT:**
+- `did` is the CALLED number (your KooKoo number), NOT the caller
+- `call_id` is the CALLER's phone number — use this to identify who is calling
+- `x_headers` is a JSON STRING (must be parsed) containing all the rich caller data from NewCall
+- The `x-uui` attribute set in the `<stream>` XML tag is NOT forwarded as `x-uui` — KooKoo forwards it inside `x_headers`
 
 **Audio data (`media`):**
 ```json
 {
   "event": "media",
   "type": "media",
-  "ucid": "111XXXXXXXX71",
+  "ucid": "21275806501458167",
   "data": {
     "samples": [8, 8, 8, ...],
     "bitsPerSample": 16,
@@ -358,12 +410,14 @@ GET https://in1-cpaas.ozonetel.com/restkookoo/index.php/api/Call_data/calldata/u
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| `agent does not exist` | Wrong agent ID | Use the ID from the ElevenLabs URL: `agent_xxxx` (not the name) |
-| `Override not allowed` | Agent config locked | Don't send config overrides, or enable in ElevenLabs > Security tab |
-| `MongoDB connection error` | Whitespace in URI | Ensure URI is a single line with no line breaks |
-| Blank audio / silence | ElevenLabs not connected | Check agent ID, API key, and Railway logs |
-| Stream duration=1 | WebSocket URL wrong | SDK auto-detects from RAILWAY_PUBLIC_DOMAIN — remove WEBSOCKET_URL placeholder |
-| Dashboard shows no calls | MongoDB not connected | Set MONGODB_URI in Railway Variables dashboard (not .env file) |
+| `agent does not exist` | Wrong agent ID | Use the ID from the ElevenLabs URL: `agent_xxxx` (not the display name) |
+| `Override not allowed` | Agent config locked | Don't send `conversation_config_override` with `prompt` or `first_message`. Configure the prompt directly in ElevenLabs dashboard. Use `custom_llm_extra_body` instead to pass dynamic data. |
+| `MongoDB connection error` | Whitespace in URI | Ensure URI is a single line with no line breaks when pasting into Railway Variables |
+| Blank audio / silence | ElevenLabs not connected | Check agent ID, API key, and Railway logs for connection errors |
+| Stream duration=1 | WebSocket URL wrong | SDK auto-detects from `RAILWAY_PUBLIC_DOMAIN` — remove any `WEBSOCKET_URL` placeholder env var |
+| Dashboard shows no calls | MongoDB not connected | Set `MONGODB_URI` in Railway Variables dashboard (not in .env file — Railway doesn't read .env) |
+| Caller number shows as the KooKoo number | Using `did` instead of `call_id` | `did` = your KooKoo number. Use `call_id` from WebSocket start event or `cid` from `x_headers` for the CALLER's number |
+| `x-uui` not found on WebSocket | KooKoo renames it | KooKoo forwards `x-uui` as `x_headers` (JSON string). Parse it: `JSON.parse(message.x_headers)` |
 
 ---
 
