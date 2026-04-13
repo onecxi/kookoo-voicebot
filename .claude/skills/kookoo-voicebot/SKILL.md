@@ -1,6 +1,6 @@
 ---
 name: kookoo-voicebot
-description: Build and deploy any AI voice agent on KooKoo/Ozonetel telephony with ElevenLabs OR OpenAI Realtime API. Use when the user wants to create ANY phone-based voice application — receptionist, tutor, support bot, appointment scheduler, survey bot, etc. Supports two AI providers: ElevenLabs (Conversational AI) and OpenAI (GPT-4o Realtime). Generates a complete deployable Node.js app with a /kookoo URL to paste into the KooKoo portal.
+description: "Build and deploy any AI voice agent on KooKoo/Ozonetel telephony with ElevenLabs OR OpenAI Realtime API. Use when the user wants to create ANY phone-based voice application. Supports two AI providers - ElevenLabs (Conversational AI) and OpenAI (GPT-4o Realtime). Generates a complete deployable Node.js app with a /kookoo URL to paste into the KooKoo portal."
 argument-hint: "[describe your voice agent]"
 allowed-tools: Bash(npm *) Bash(node *) Bash(git *) Bash(curl *) Read Write Edit Grep Glob WebFetch
 ---
