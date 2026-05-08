@@ -1,7 +1,7 @@
 ---
 name: kookoo-voicebot
-description: "Build and deploy AI voice agents that answer real phone calls. Use whenever a user wants a voice agent, phone bot, IVR replacement, auto-attendant, appointment booking line, phone support agent, lead qualification bot, voicemail handler, call routing system, multilingual phone agent (Hindi, Telugu, Tamil, etc.), or anything that says 'answer calls with AI', 'AI phone agent', 'phone number that talks', or 'voice agent on a phone number'. Runs on KooKoo/Ozonetel telephony with a choice of two AI providers: ElevenLabs Conversational AI (best voice quality, dashboard-configured prompts) or OpenAI Realtime API (GPT-4o, prompt in code, native function calling). Generates a complete deployable Node.js app with a /kookoo URL to paste into the KooKoo portal."
-argument-hint: "[describe your voice agent] [--openai | --elevenlabs]"
+description: "Build and deploy AI voice agents that answer real phone calls. Use whenever a user wants a voice agent, phone bot, IVR replacement, auto-attendant, appointment booking line, phone support agent, lead qualification bot, voicemail handler, call routing system, multilingual phone agent (Hindi, Telugu, Tamil, Spanish, Arabic, etc.), or anything that says 'answer calls with AI', 'AI phone agent', 'phone number that talks', 'voice agent on a phone number', or 'translate calls live'. Runs on KooKoo/Ozonetel telephony with three AI provider options: ElevenLabs Conversational AI (best voice quality, dashboard-configured prompts), OpenAI Realtime API (gpt-realtime-2 with selectable reasoning effort, prompt in code, native function calling), or OpenAI Translate Bridge (gpt-realtime-translate ↔ gpt-realtime-2 for callers speaking 70+ languages, AI replies in caller's own language). Generates a complete deployable Node.js app with a /kookoo URL to paste into the KooKoo portal."
+argument-hint: "[describe your voice agent] [--openai | --elevenlabs | --translate]"
 allowed-tools: Bash(npm *) Bash(node *) Bash(git *) Bash(curl *) Read Write Edit Grep Glob WebFetch
 ---
 
@@ -15,17 +15,20 @@ The user said: **$ARGUMENTS**
 
 Based on their description, you will:
 1. **Determine the AI provider:**
-   - If `$ARGUMENTS` contains `--openai`, use OpenAI Realtime API
+   - If `$ARGUMENTS` contains `--openai`, use OpenAI Realtime API (gpt-realtime-2)
    - If `$ARGUMENTS` contains `--elevenlabs`, use ElevenLabs Conversational AI
-   - If the user named a provider in prose (e.g. "using OpenAI", "with ElevenLabs"), use that
-   - Otherwise, **default to OpenAI** (no dashboard setup, faster time-to-running agent) and tell the user you chose it — they can switch with `--elevenlabs` if they prefer voice cloning or UI-based prompt editing
+   - If `$ARGUMENTS` contains `--translate`, use the OpenAI Translate Bridge (multilingual)
+   - If the user named a provider in prose (e.g. "using OpenAI", "with ElevenLabs", "translate live"), use that
+   - **If the user mentions multilingual / non-English callers / translation / 70+ languages / "reply in caller's language"**, default to `--translate`
+   - Otherwise, **default to OpenAI** (no dashboard setup, faster time-to-running agent) and tell the user you chose it — they can switch with `--elevenlabs` (voice cloning, UI prompts) or `--translate` (multilingual)
 2. Scaffold a complete Node.js project
 3. Install `kookoo-voicebot` from npm
 4. Write `index.js` with the appropriate provider config and hooks
 5. If ElevenLabs: write the agent system prompt to paste in ElevenLabs dashboard
 6. If OpenAI: write the system prompt directly in code (`instructions` field)
-7. Create deployment files (Procfile, nixpacks.toml, .env.example, .gitignore)
-8. Tell them exactly how to deploy and get a working phone number
+7. If OpenAI Translate Bridge: write an English-only receptionist prompt; the translate sessions are language-agnostic. NOTE: translate-bridge is not yet a built-in `provider` on the SDK — implement orchestration directly in your backend (see "Multilingual Translate Bridge (advanced)" below).
+8. Create deployment files (Procfile, nixpacks.toml, .env.example, .gitignore)
+9. Tell them exactly how to deploy and get a working phone number
 
 ---
 
@@ -41,7 +44,7 @@ npm install kookoo-voicebot
 
 ### 2. Create index.js
 
-The SDK supports two providers. Use whichever the user chose (or default to OpenAI):
+The SDK supports two providers (OpenAI, ElevenLabs) plus an advanced translate-bridge pattern that's implemented in user code (not yet as an SDK provider). Use whichever the user chose (or default to OpenAI):
 
 #### Option A: OpenAI Realtime API (DEFAULT — system prompt in code, no dashboard needed)
 
@@ -54,8 +57,9 @@ const bot = new KooKooVoiceBot(
     provider: 'openai',
     openai: {
       apiKey: process.env.OPENAI_API_KEY,
-      model: 'gpt-4o-realtime-preview',
-      voice: 'nova', // alloy, echo, fable, onyx, nova, shimmer
+      model: 'gpt-realtime-2',         // released May 2026; supersedes gpt-4o-realtime-preview
+      reasoningEffort: 'low',           // minimal | low | medium | high | xhigh — default low
+      voice: 'nova',                    // alloy, echo, fable, onyx, nova, shimmer
       instructions: `<WRITE THE SYSTEM PROMPT HERE BASED ON USER'S USE CASE>`,
       tools: [
         // Add function calling tools if the agent needs to take actions
@@ -69,6 +73,8 @@ const bot = new KooKooVoiceBot(
 
 bot.start();
 ```
+
+**Pricing (May 2026):** `gpt-realtime-2` is $32 / 1M audio-input tokens, $64 / 1M audio-output tokens. Default `reasoningEffort: 'low'` for receptionist flows; bump to `'high'` / `'xhigh'` only when complex reasoning is required.
 
 #### Option B: ElevenLabs (agent configured in ElevenLabs dashboard)
 
@@ -92,10 +98,34 @@ const bot = new KooKooVoiceBot(
 bot.start();
 ```
 
-**OpenAI advantages:** System prompt lives in code (no separate dashboard), function calling built-in, GPT-4o intelligence, faster to first working call.
+**OpenAI advantages:** System prompt lives in code (no separate dashboard), function calling built-in, gpt-realtime-2 reasoning (GPT-5-class), tunable `reasoningEffort`, faster to first working call.
 **ElevenLabs advantages:** Better voice quality/cloning, agent configured via UI, no code changes for prompt updates, better for non-technical prompt owners.
 
 **OpenAI voice options:** `alloy` (neutral), `echo` (male), `fable` (British), `onyx` (deep male), `nova` (female), `shimmer` (soft female).
+
+#### Option C: OpenAI Translate Bridge (multilingual receptionist, 70+ languages)
+
+Use when callers may speak any language and the AI should reply in the **caller's own language**. Three OpenAI sessions are stitched per call:
+
+```
+Caller (lang X) → gpt-realtime-translate (→ English transcript)
+                                                ↓
+                                       gpt-realtime-2 (English in / English audio out)
+                                                ↓
+                                  gpt-realtime-translate (English audio → lang X audio) → Caller
+```
+
+**The npm SDK does not yet ship this as a `provider`.** Do not write `provider: 'openai-translate'` — it won't work. Instead, run a custom WebSocket handler in your backend. A reference implementation lives in the `kookoo-ai-receptionist` backend repo:
+
+- `src/services/translateBridgeHandler.js` — orchestrator
+- `src/services/openaiTranslateSession.js` — gpt-realtime-translate WS wrapper
+- `src/services/openaiRealtimeSession.js` — gpt-realtime-2 WS wrapper
+- `src/utils/audioConverter.js` — `kookooSamplesToBase64_24k` / `base64_24kToKookooChunks` helpers (8↔24 kHz)
+
+See **Multilingual Translate Bridge (advanced)** below for the full pattern, env vars, and pitfalls.
+
+**Translate-bridge advantages:** Caller hears their own language naturally; AI reasoning still benefits from gpt-realtime-2; works across 70+ source languages.
+**Trade-offs:** ~3× the OpenAI cost per call (3 concurrent sessions), ~1.5–2s perceived first-turn latency, no built-in barge-in (must be added manually), no first-greeting in auto-detect mode (need to wait for caller's first utterance to detect language).
 
 **OpenAI tools format** (for function calling):
 ```js
@@ -157,6 +187,15 @@ SIP_NUMBER=524431
 PORT=3000
 ```
 
+**For OpenAI Translate Bridge (multilingual):**
+```
+OPENAI_API_KEY=sk-proj-xxxxxxxxxxxx
+CALLER_LANGUAGE=                # empty = auto-detect; or set ISO code: es, hi, te, ar, fr, ...
+MODE=translate                  # only if you gate the bridge behind a mode flag in your app
+SIP_NUMBER=524431
+PORT=3000
+```
+
 If using MongoDB, add: `MONGODB_URI=mongodb+srv://...`
 
 ### 4. Create deployment files
@@ -191,6 +230,14 @@ For tools/function calling, define them in the `tools` array in config. OpenAI h
 
 **Voice options:** `alloy`, `echo`, `fable`, `onyx`, `nova`, `shimmer`.
 
+**Model selection:** Default to `gpt-realtime-2` (May 2026). For older deployments still on `gpt-4o-realtime-preview`, suggest upgrading. Use `reasoningEffort: 'low'` (default) for receptionists; bump to `'high'` only for diagnostic / triage / complex-decision flows.
+
+#### If using OpenAI Translate Bridge (multilingual):
+
+No dashboard needed. The English-only receptionist prompt lives in code on the gpt-realtime-2 leg. The two `gpt-realtime-translate` legs need no prompt — just a target language. Source language is auto-detected from the caller's first utterance unless `CALLER_LANGUAGE` is set explicitly.
+
+This pattern is **not yet a built-in `provider` on the npm SDK** — implement the orchestration directly in your backend's WebSocket handler. See the **Multilingual Translate Bridge (advanced)** section below for the wiring contract and pitfalls.
+
 #### If using ElevenLabs:
 
 Write a system prompt and tell the user to:
@@ -218,6 +265,7 @@ Tell the user:
    - Go to railway.com, create new project, connect GitHub repo
    - For OpenAI: set `OPENAI_API_KEY`, `SIP_NUMBER`
    - For ElevenLabs: set `ELEVENLABS_AGENT_ID`, `ELEVENLABS_API_KEY`, `SIP_NUMBER`
+   - For OpenAI Translate Bridge: set `OPENAI_API_KEY`, `MODE=translate`, optional `CALLER_LANGUAGE` (ISO code or leave empty for auto-detect), `SIP_NUMBER`
    - `MONGODB_URI` (if using MongoDB) — paste as a SINGLE LINE, no line breaks
    - Deploy — Railway gives you a URL like `https://your-app.up.railway.app`
 3. **The application URL is:** `https://your-app.up.railway.app/kookoo`
@@ -507,6 +555,80 @@ GET https://in1-cpaas.ozonetel.com/restkookoo/index.php/api/Call_data/calldata/u
 
 ---
 
+## Multilingual Translate Bridge (advanced)
+
+Pattern for callers speaking any of OpenAI's 70+ supported languages where the AI must reply in the caller's own language. Use when stock `provider: 'openai'` isn't enough because the caller is non-English.
+
+### Models used
+
+| Role | Model | Purpose |
+|------|-------|---------|
+| Translate-IN | `gpt-realtime-translate` | Caller speech (lang X) → English transcript + auto-detected source language |
+| Brain | `gpt-realtime-2` | Reasons in English; emits English audio reply |
+| Translate-OUT | `gpt-realtime-translate` | English audio → caller's-language audio |
+
+### Endpoints
+
+```
+wss://api.openai.com/v1/realtime/translations?model=gpt-realtime-translate
+wss://api.openai.com/v1/realtime?model=gpt-realtime-2
+```
+
+Required headers on every WS:
+- `Authorization: Bearer <OPENAI_API_KEY>`
+- `OpenAI-Safety-Identifier: <your-app>-<ucid>`
+
+### Audio format
+
+- KooKoo sends/expects: PCM16 **8 kHz**, JSON `{samples:[...], sampleRate:8000}` array, 80 samples / 10 ms.
+- OpenAI Realtime + Translate use: PCM16 **24 kHz** base64 inside `input_audio_buffer.append`.
+- You MUST resample 8↔24 kHz on both legs. 3× linear-interpolation upsample / 3-sample average decimate is good enough for telephony. Reference helpers (`kookooSamplesToBase64_24k` / `base64_24kToKookooChunks`) live in the `kookoo-ai-receptionist` backend's `src/utils/audioConverter.js`.
+
+### Session orchestration
+
+1. On KooKoo `start`:
+   - Open Translate-IN with `session.audio.output.language = 'en'`.
+   - Open gpt-realtime-2 with `modalities: ['audio','text']`, `turn_detection: null`, English-only instructions.
+   - **Do NOT open Translate-OUT yet** — its target language is unknown.
+2. Pipe caller media → 8→24 kHz upsample → Translate-IN `input_audio_buffer.append`.
+3. On Translate-IN's `conversation.item.input_audio_transcription.completed`:
+   - Read `language` (or `detected_language`) field → open Translate-OUT with that target.
+   - Buffer any gpt-realtime-2 audio that arrives before Translate-OUT is connected; flush once it is.
+4. On Translate-IN's translated transcript (`response.output_audio_transcript.done`):
+   - Send the **English** text to gpt-realtime-2 via `conversation.item.create` (`input_text`) + `response.create`.
+   - **Critical**: forward the *translated* (English) transcript, NOT the *source* (caller-language) transcript. Forwarding the source causes the AI to reason in the wrong language and Translate-OUT to double-translate, producing audio in unrelated languages.
+5. On gpt-realtime-2's audio delta:
+   - Forward base64 24 kHz chunks to Translate-OUT `input_audio_buffer.append`.
+6. On Translate-OUT's audio delta:
+   - 24→8 kHz downsample → 80-sample frames → KooKoo media packets (with `seqid`).
+
+### Required env vars
+
+```
+OPENAI_API_KEY=sk-...
+CALLER_LANGUAGE=          # ISO code (es, hi, te, ar, ...) or empty for auto-detect
+MODE=translate            # if you're gating the bridge behind a flag in an existing app
+```
+
+### gpt-realtime-2 instructions for the bridge
+
+```
+You are a phone receptionist. Reply ONLY in clear, natural English in 1-3 sentences.
+A separate translator speaks your words to the caller in their language —
+do NOT switch language yourself. No markdown. Never claim to be human;
+say "I'm the receptionist" if pressed.
+```
+
+### Known trade-offs / pitfalls
+
+- **No greeting first** in auto-detect mode: the AI must wait for the caller's first utterance so source language can be detected before Translate-OUT opens. Set `CALLER_LANGUAGE` explicitly to allow an opening greeting.
+- **Latency stacks**: ~1.5–2 s first turn, ~1 s subsequent. Acceptable for phone, not for snappy IVR.
+- **Cost ~3×** stock OpenAI per call (three concurrent OpenAI sessions).
+- **Barge-in is not free**: Translate-IN's VAD doesn't propagate cancel signals to gpt-realtime-2 / Translate-OUT. To support interruption, on Translate-IN `input_audio_buffer.speech_started` send `response.cancel` to gpt-realtime-2, drop pending Translate-OUT audio, and emit `{"command":"clearBuffer"}` to KooKoo.
+- **Event-name variance**: OpenAI has shipped both `response.audio.delta` and `response.output_audio.delta` over time. Handle both.
+
+---
+
 ## Debugging Reference
 
 | Symptom | Cause | Fix |
@@ -519,6 +641,10 @@ GET https://in1-cpaas.ozonetel.com/restkookoo/index.php/api/Call_data/calldata/u
 | Dashboard shows no calls | MongoDB not connected | Set `MONGODB_URI` in Railway Variables dashboard (not in .env file — Railway doesn't read .env) |
 | Caller number shows as the KooKoo number | Using `did` instead of `call_id` | `did` = your KooKoo number. Use `call_id` from WebSocket start event or `cid` from `x_headers` for the CALLER's number |
 | `x-uui` not found on WebSocket | KooKoo renames it | KooKoo forwards `x-uui` as `x_headers` (JSON string). Parse it: `JSON.parse(message.x_headers)` |
+| Translate-bridge: caller hears wrong / random language | Forwarded the *source* transcript (caller's language) to gpt-realtime-2 | Forward the **translated** transcript (English) to gpt-realtime-2. Source transcript is for logging only. |
+| Translate-bridge: caller hears nothing | Translate-OUT never opened (auto-detect didn't fire) | Log raw Translate-IN events and look for the `language` field. Set `CALLER_LANGUAGE` explicitly as a fallback. |
+| Translate-bridge: chipmunk / robotic audio | Wrong sample rate (16 kHz instead of 24 kHz) on OpenAI side | OpenAI Realtime + Translate use 24 kHz, NOT 16 kHz. Don't reuse the ElevenLabs 8↔16 helpers. |
+| Translate-bridge: AI replies in caller's language but Translate-OUT mangles it | gpt-realtime-2 ignored the English-only instruction | Tighten the system prompt: "Reply ONLY in English. A separate translator speaks to the caller." |
 
 ---
 
