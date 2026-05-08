@@ -1,7 +1,7 @@
 ---
 name: kookoo-voicebot
 description: "Build and deploy AI voice agents that answer real phone calls. Use whenever a user wants a voice agent, phone bot, IVR replacement, auto-attendant, appointment booking line, phone support agent, lead qualification bot, voicemail handler, call routing system, multilingual phone agent (Hindi, Telugu, Tamil, Spanish, Arabic, etc.), or anything that says 'answer calls with AI', 'AI phone agent', 'phone number that talks', 'voice agent on a phone number', or 'translate calls live'. Runs on KooKoo/Ozonetel telephony with three AI provider options: ElevenLabs Conversational AI (best voice quality, dashboard-configured prompts), OpenAI Realtime API (gpt-realtime-2 with selectable reasoning effort, prompt in code, native function calling), or OpenAI Translate Bridge (gpt-realtime-translate ↔ gpt-realtime-2 for callers speaking 70+ languages, AI replies in caller's own language). Generates a complete deployable Node.js app with a /kookoo URL to paste into the KooKoo portal."
-argument-hint: "[describe your voice agent] [--openai | --elevenlabs | --translate]"
+argument-hint: "[describe your voice agent] [--multilingual | --openai-en | --elevenlabs | --translate]"
 allowed-tools: Bash(npm *) Bash(node *) Bash(git *) Bash(curl *) Read Write Edit Grep Glob WebFetch
 ---
 
@@ -15,12 +15,12 @@ The user said: **$ARGUMENTS**
 
 Based on their description, you will:
 1. **Determine the AI provider:**
-   - If `$ARGUMENTS` contains `--openai`, use OpenAI Realtime API (gpt-realtime-2)
-   - If `$ARGUMENTS` contains `--elevenlabs`, use ElevenLabs Conversational AI
-   - If `$ARGUMENTS` contains `--translate`, use the OpenAI Translate Bridge (multilingual)
-   - If the user named a provider in prose (e.g. "using OpenAI", "with ElevenLabs", "translate live"), use that
-   - **If the user mentions multilingual / non-English callers / translation / 70+ languages / "reply in caller's language"**, default to `--translate`
-   - Otherwise, **default to OpenAI** (no dashboard setup, faster time-to-running agent) and tell the user you chose it — they can switch with `--elevenlabs` (voice cloning, UI prompts) or `--translate` (multilingual)
+   - If `$ARGUMENTS` contains `--multilingual` (or just `--openai`), use OpenAI Multilingual — single `gpt-realtime-2` session with native language detection (Option C below)
+   - If `$ARGUMENTS` contains `--openai-en`, use OpenAI Realtime in English-only mode (Option A below) — same model but locked to English. Pick this only when you're certain every caller speaks English and want the simplest prompt.
+   - If `$ARGUMENTS` contains `--elevenlabs`, use ElevenLabs Conversational AI (Option B)
+   - If `$ARGUMENTS` contains `--translate`, use the OpenAI Translate Bridge (Option D, EXPERIMENTAL — see warning in that section)
+   - If the user named a provider in prose ("using OpenAI", "with ElevenLabs", "translate live"), use that — but if they say "OpenAI" without qualification, prefer **multilingual** since it works for English too
+   - **Default = `--multilingual`.** It works for callers speaking ANY supported language (including English), no dashboard, lowest latency. Saves time vs picking English-only and later discovering you need to handle a non-English caller. Tell the user you chose multilingual; they can opt into `--openai-en`, `--elevenlabs`, or `--translate` if they have a specific reason.
 2. Scaffold a complete Node.js project
 3. Install `kookoo-voicebot` from npm
 4. Write `index.js` with the appropriate provider config and hooks
@@ -44,9 +44,17 @@ npm install kookoo-voicebot
 
 ### 2. Create index.js
 
-The SDK supports two providers (OpenAI, ElevenLabs) plus an advanced translate-bridge pattern that's implemented in user code (not yet as an SDK provider). Use whichever the user chose (or default to OpenAI):
+The SDK supports two providers (OpenAI, ElevenLabs) plus an advanced translate-bridge pattern that's implemented in user code (not yet as an SDK provider).
 
-#### Option A: OpenAI Realtime API (DEFAULT — system prompt in code, no dashboard needed)
+**Pick by use case:**
+- **Default — Option C: OpenAI Multilingual.** One `gpt-realtime-2` session, audio in / audio out, the model auto-detects the caller's language and replies in same. ~500–1000 ms latency. Works for English too.
+- **Option A: OpenAI Realtime (English-only).** Same model as multilingual, but instructions lock it to English. Pick if your callers are guaranteed English-speaking and you want the simplest prompt.
+- **Option B: ElevenLabs.** Higher voice quality, voice cloning available, prompt edited in dashboard. Pick if voice quality matters more than latency.
+- **Option D: OpenAI Translate Bridge.** EXPERIMENTAL — `gpt-realtime-translate` is currently unreliable as of May 2026. Don't pick unless you know it works for your case.
+
+#### Option A: OpenAI Realtime API — English-only (system prompt in code, no dashboard needed)
+
+> **Not the default anymore.** For new projects, use **Option C: OpenAI Multilingual** (works for English too, plus 70+ other languages, same model and latency). Pick Option A only if you're certain every caller will speak English and want the simplest prompt.
 
 ```js
 const { KooKooVoiceBot, xml } = require('kookoo-voicebot');
@@ -144,7 +152,7 @@ bot.start();
 
 **OpenAI voice options:** `alloy` (neutral), `echo` (male), `fable` (British), `onyx` (deep male), `nova` (female), `shimmer` (soft female).
 
-#### Option C: OpenAI Multilingual (single gpt-realtime-2 session) — RECOMMENDED for non-English
+#### Option C: OpenAI Multilingual (single gpt-realtime-2 session) — DEFAULT for new projects
 
 When callers may speak any language and the AI should reply in **the caller's same language**. Uses `gpt-realtime-2` alone with audio-in / audio-out and an instruction to "detect the language from the first utterance and reply in that same language." `gpt-realtime` and `gpt-realtime-2` are both natively multilingual — no translation hop is needed.
 
