@@ -322,11 +322,86 @@ All IVR responses MUST be wrapped in `<response>` tags:
 |-----------|-------------|
 | `is_sip` | Always `"true"` |
 | `url` | Your WebSocket server URL (ws:// or wss://) |
-| `x-uui` | Custom JSON data to pass with the stream |
+| `x-uui` | **Custom JSON string** carrying the call's metadata into the WS handler |
 
 Content inside the tag = **SIP registration number**.
 
-**NOTE:** The `x-uui` data set in the XML does NOT arrive as `x-uui` on the WebSocket. KooKoo forwards it as `x_headers` (see WebSocket Events below).
+##### x-uui is the ONLY channel to pass NewCall params into the WS handler
+
+KooKoo's WebSocket `start` event natively contains ONLY:
+- `ucid`, `did`, `call_id`, `x_account`, `media`, plus whatever you put in `x-uui`.
+
+It does NOT include `operator`, `circle`, `cid_e164`, `cid_countryname`, `cid_type`, `request_time`, etc. by default. **If your WS handler needs any of those, your IVR webhook MUST take all the NewCall query/body params and JSON-encode them into `x-uui` on the `<stream>` tag.** Otherwise that data is gone forever once the WS opens.
+
+**Required pattern in the NewCall handler:**
+
+```js
+router.all('/', (req, res) => {
+  const params = { ...req.query, ...req.body };
+  if (params.event === 'NewCall') {
+    // Serialise EVERY NewCall param into x-uui — escape single quotes
+    // because we wrap the attribute value in single quotes.
+    const uui = JSON.stringify(params).replace(/'/g, '&apos;');
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<response>
+    <start-record/>
+    <stream is_sip="true" url="${wsUrl}/ws" x-uui='${uui}'>${sipNumber}</stream>
+</response>`;
+    res.set('Content-Type', 'text/xml');
+    return res.send(xml);
+  }
+  // ... handle Stream / Hangup / etc.
+});
+```
+
+**Data flow end-to-end:**
+
+```
+Caller dials KooKoo number
+  ↓
+KooKoo IVR webhook  GET /kookoo?event=NewCall&sid=…&cid=…&operator=…&circle=…&…
+  ↓ (your IVR handler reads req.query)
+Returns <stream x-uui='{"event":"NewCall","sid":"…","cid":"…","operator":"…",…}'>
+  ↓ (KooKoo bridges SIP, opens WebSocket)
+WebSocket "start" event
+  ├── ucid       (KooKoo-generated)
+  ├── did        (your KooKoo number)
+  ├── call_id    (caller's phone number, same as cid)
+  └── x_headers  ← JSON STRING of whatever you put in x-uui
+                   (KooKoo renames the attribute from "x-uui" to "x_headers"
+                    and encodes it as a string, NOT a parsed object)
+```
+
+**Reading x_headers in your WS handler:**
+
+```js
+ws.on('message', (raw) => {
+  const msg = JSON.parse(raw.toString());
+  if (msg.event === 'start') {
+    let callerDetails = {};
+    if (msg.x_headers) {
+      try {
+        callerDetails = typeof msg.x_headers === 'string'
+          ? JSON.parse(msg.x_headers)   // it's a STRING — must JSON.parse
+          : msg.x_headers;
+      } catch {}
+    }
+    // Now you have everything from NewCall:
+    const callerNumber = msg.call_id || callerDetails.cid;
+    const operator     = callerDetails.operator;     // 'Airtel'
+    const circle       = callerDetails.circle;       // 'ANDHRA PRADESH'
+    const country      = callerDetails.cid_countryname;
+    const requestTime  = callerDetails.request_time;
+  }
+});
+```
+
+**Common mistakes that lose call data:**
+
+- Hardcoding `x-uui="{}"` in the XML — the WS handler then sees nothing beyond `ucid`/`did`/`call_id`.
+- Forgetting to escape `'` inside the JSON when the XML attribute is single-quoted (XML parsers will silently truncate).
+- Treating `x_headers` as a parsed object — it's a JSON string, you MUST `JSON.parse` it.
+- Reading `msg['x-uui']` on the WebSocket — KooKoo renamed it to `x_headers`. The original `x-uui` key is gone.
 
 #### `<collectdtmf>` — Collect keypad input
 
